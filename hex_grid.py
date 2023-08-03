@@ -1,18 +1,15 @@
+import pygame
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.patches import RegularPolygon
-import matplotlib.lines as mlines
 
-# Define a Hexagon class for convenience
 class Hexagon:
     def __init__(self, q, r):
         self.q = q
         self.r = r
 
-    def to_pixel(self):
-        x = np.sqrt(3) * (self.q + self.r/2)
-        y = 3./2. * self.r
-        return x, y
+    def to_pixel(self, size):
+        x = size * 3/2 * self.q
+        y = size * np.sqrt(3) * (self.r + self.q/2)
+        return (x, y)
 
     def __eq__(self, other):
         return self.q == other.q and self.r == other.r
@@ -20,75 +17,98 @@ class Hexagon:
     def __hash__(self):
         return hash((self.q, self.r))
 
-# Create a function to draw the hexagon grid and return the hexagons as a set
-def draw_hex_grid(size):
-    hexagons = set()
-    for q in range(-size, size+1):
-        for r in range(-size, size+1):
+# Create the hexagonal grid and store it as a list of pygame.Polygon objects
+def create_hex_grid(size, grid_range):
+    hexagons = []
+    for q in range(-grid_range, grid_range+1):
+        r1 = max(-grid_range, -q - grid_range)
+        r2 = min(grid_range, -q + grid_range)
+        for r in range(r1, r2+1):
             hex = Hexagon(q, r)
-            hex_center = hex.to_pixel()
-            hex_color = 'skyblue'
-            hexagons.add(hex)
-
-            hex_patch = RegularPolygon(hex_center, numVertices=6, radius=0.95, 
-                                       edgecolor='k', facecolor=hex_color, alpha=0.2)
-            plt.gca().add_patch(hex_patch)
-
+            center_x, center_y = hex.to_pixel(size)
+            hex_points = [(center_x + size * np.cos(theta), center_y + size * np.sin(theta)) for theta in np.linspace(0, 2*np.pi, 6, endpoint=False)]
+            hexagons.append((hex, hex_points))
     return hexagons
 
-# Create a function to find and draw a line between two hexagons
-def draw_line(hexA, hexB, hexagons):
-    # Draw a line between the two hexagons
-    line = mlines.Line2D(*zip(hexA.to_pixel(), hexB.to_pixel()), color='red')
-    plt.gca().add_line(line)
+# Bresenham's line algorithm adapted for hexagonal grid
+def get_line_high_precision(start, end, num_points=100):
+    # Calculate the points along the line
+    x_values = np.linspace(start.q, end.q, num_points)
+    y_values = np.linspace(start.r, end.r, num_points)
+    # Identify the hexagon each point falls into
+    hexes = set()
+    for x, y in zip(x_values, y_values):
+        hex = Hexagon(round(x), round(y))
+        hexes.add(hex)
+    return hexes
 
-    # Use a simple DDA algorithm to sample the line and find crossed hexagons
-    crossed_hexagons = set([hexA, hexB])
-    N = 1000  # Number of samples (increase for higher accuracy)
-    for t in np.linspace(0, 1, N):
-        # Compute a point along the line
-        x = (1-t)*hexA.to_pixel()[0] + t*hexB.to_pixel()[0]
-        y = (1-t)*hexA.to_pixel()[1] + t*hexB.to_pixel()[1]
 
-        # Convert the point back to hexagon coordinates
-        q = (np.sqrt(3)/3 * x - 1./3 * y) / (0.95 * 3./2.)
-        r = (2./3 * y) / (0.95 * 3./2.)
+# Pygame setup
+pygame.init()
+screen_width, screen_height = 800, 800
+screen = pygame.display.set_mode((screen_width, screen_height))
+clock = pygame.time.Clock()
 
-        # Round to nearest hexagon coordinates
-        q, r = round(q), round(r)
-        hex = Hexagon(q, r)
+size = 30  # Size of each hexagon
+grid_range = 5
+hexagons = create_hex_grid(size=size, grid_range=grid_range)  # Reduced grid_range for better fit in the screen
 
-        if hex in hexagons:
-            crossed_hexagons.add(hex)
+# Calculate the center of the hexagonal grid
+max_x = max(hex_points[0][0] for hex, hex_points in hexagons)
+min_x = min(hex_points[0][0] for hex, hex_points in hexagons)
+max_y = max(hex_points[0][1] for hex, hex_points in hexagons)
+min_y = min(hex_points[0][1] for hex, hex_points in hexagons)
+grid_center_x = (max_x + min_x) / 2
+grid_center_y = (max_y + min_y) / 2
+# Calculate the adjustment values for centering the grid
+adjust_x = screen_width / 2 - grid_center_x
+adjust_y = screen_height / 2 - grid_center_y
 
-    # Draw the crossed hexagons in a different color
-    for hex in crossed_hexagons:
-        hex_center = hex.to_pixel()
-        hex_patch = RegularPolygon(hex_center, numVertices=6, radius=0.95, 
-                                   edgecolor='k', facecolor='green', alpha=0.5)
-        plt.gca().add_patch(hex_patch)
+# Adjust the pixel coordinates of the hexagons to center the grid
+for hex, hex_points in hexagons:
+    for i in range(len(hex_points)):
+        hex_points[i] = (hex_points[i][0] + adjust_x, hex_points[i][1] + adjust_y)
 
-    return crossed_hexagons
+# Main loop
+running = True
+hexA = hexB = None
+while running:
+    screen.fill(pygame.Color('white'))  # Fill the background
 
-# Set up the drawing
-plt.figure(figsize=(8,8))
-plt.gca().set_aspect('equal')
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            x, y = pygame.mouse.get_pos()
+            for hex, hex_points in hexagons:
+                if pygame.draw.polygon(screen, pygame.Color('white'), hex_points).collidepoint(x, y):
+                    print(f"Clicked hexagon at coordinates (q={hex.q}, r={hex.r})")
+                    pygame.draw.polygon(screen, pygame.Color('green'), hex_points)  # Highlight the clicked hexagon
+                    if hexA is None:
+                        hexA = hex
+                    elif hexB is None:
+                        hexB = hex
+                    else:
+                        hexA = hex
+                        hexB = None
 
-# Draw a hex grid of size 10 and get the hexagons
-hexagons = draw_hex_grid(10)
+    # Draw all the hexagons
+    for hex, hex_points in hexagons:
+        pygame.draw.polygon(screen, pygame.Color('skyblue'), hex_points, 3)  # Line width parameter added for borders
 
-# Draw a line between two hexagons and get the crossed hexagons
-hexA = Hexagon(0, 0)
-hexB = Hexagon(5, -7)
-crossed_hexagons = draw_line(hexA, hexB, hexagons)
+    # Highlight hexagons crossed by the line
+    if hexA is not None and hexB is not None:
+        crossed_hexes = get_line_high_precision(hexA, hexB)
+        for crossed_hex in crossed_hexes:
+            for hex, hex_points in hexagons:
+                if hex == crossed_hex:
+                    pygame.draw.polygon(screen, pygame.Color('yellow'), hex_points)  # Highlight with yellow color
+                    pygame.draw.polygon(screen, pygame.Color('black'), hex_points, 3)  # Add border with black color
 
-# Print the crossed hexagons
-for hex in crossed_hexagons:
-    print(f"Crossed hexagon at coordinates (q={hex.q}, r={hex.r})")
+        # Draw the line between selected hexagons
+        pygame.draw.line(screen, pygame.Color('red'), (hexA.to_pixel(size)[0] + adjust_x, hexA.to_pixel(size)[1] + adjust_y), (hexB.to_pixel(size)[0] + adjust_x, hexB.to_pixel(size)[1] + adjust_y), 3)
 
-# Adjust the plot limits
-plt.xlim(-20, 20)
-plt.ylim(-20, 20)
+    pygame.display.flip()  # Update the display
+    clock.tick(60)  # Cap at 60 FPS
 
-# Display the plot
-plt.show()
+pygame.quit()
